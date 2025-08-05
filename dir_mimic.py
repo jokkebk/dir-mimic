@@ -261,9 +261,76 @@ def classify_files(inventory_records: List[FileRecord], target_records: List[Fil
     return unchanged, to_copy, missing, extra
 
 
+def optimize_commands(to_copy: List[Tuple], extra: List[FileRecord], level: int) -> Tuple[List[Tuple], List[Tuple], List[FileRecord]]:
+    """Optimize cp + rm operations into mv operations where possible"""
+    # Group operations by file identity
+    copy_by_identity = {}
+    delete_by_identity = {}
+    
+    # Group copy operations by file identity
+    for source_record, target_path in to_copy:
+        identity_key = source_record.get_identity_key(level)
+        if identity_key not in copy_by_identity:
+            copy_by_identity[identity_key] = []
+        copy_by_identity[identity_key].append((source_record.get_full_path(), target_path))
+    
+    # Group delete operations by file identity  
+    for record in extra:
+        identity_key = record.get_identity_key(level)
+        if identity_key not in delete_by_identity:
+            delete_by_identity[identity_key] = []
+        delete_by_identity[identity_key].append(record)
+    
+    mv_operations = []  # [(source_path, target_path)]
+    remaining_cp_operations = []  # [(source_record, target_path)]
+    remaining_rm_operations = []  # [FileRecord]
+    
+    # Process each file identity
+    all_identities = set(copy_by_identity.keys()) | set(delete_by_identity.keys())
+    
+    for identity_key in all_identities:
+        copy_ops = copy_by_identity.get(identity_key, [])
+        delete_records = delete_by_identity.get(identity_key, [])
+        delete_paths = [record.get_full_path() for record in delete_records]
+        
+        # Try to match copy targets with delete sources for mv operations
+        used_delete_indices = set()
+        remaining_copies = []
+        
+        for source_path, target_path in copy_ops:
+            # Try to find a delete path we can move from instead of copying
+            mv_created = False
+            for i, delete_path in enumerate(delete_paths):
+                if i not in used_delete_indices:
+                    # Use this delete path as source for move operation
+                    mv_operations.append((delete_path, target_path))
+                    used_delete_indices.add(i)
+                    mv_created = True
+                    break
+            
+            if not mv_created:
+                # No available delete path to move from, keep as copy
+                # Find the original source record for this copy
+                source_record = None
+                for orig_source_record, orig_target_path in to_copy:
+                    if (orig_source_record.get_full_path() == source_path and 
+                        orig_target_path == target_path):
+                        source_record = orig_source_record
+                        break
+                if source_record:
+                    remaining_cp_operations.append((source_record, target_path))
+        
+        # Add remaining delete operations that weren't used for moves
+        for i, record in enumerate(delete_records):
+            if i not in used_delete_indices:
+                remaining_rm_operations.append(record)
+    
+    return mv_operations, remaining_cp_operations, remaining_rm_operations
+
+
 def generate_unix_commands(unchanged: List[Tuple], to_copy: List[Tuple], missing: List[FileRecord], 
                           extra: List[FileRecord], target_dir: Path, verbose: bool, 
-                          delete_extra: bool) -> List[str]:
+                          delete_extra: bool, level: int) -> List[str]:
     """Generate Unix commands for dry-run mode"""
     commands = []
     
@@ -272,62 +339,103 @@ def generate_unix_commands(unchanged: List[Tuple], to_copy: List[Tuple], missing
         for inv_record, tgt_record in unchanged:
             commands.append(f"echo '{tgt_record.get_full_path()}' unchanged")
     
-    # Generate cp commands for files that need copying
-    for source_record, target_path in to_copy:
-        source_path = source_record.get_full_path()
+    # Optimize cp + rm operations into mv operations when possible
+    if delete_extra:
+        mv_operations, remaining_cp_operations, remaining_rm_operations = optimize_commands(to_copy, extra, level)
         
-        # Add mkdir -p if target directory doesn't exist
-        target_parent = str(Path(target_path).parent)
-        if target_parent and target_parent != ".":
-            commands.append(f"mkdir -p '{target_parent}'")
+        # Generate mv commands for optimized operations
+        for source_path, target_path in mv_operations:
+            # Add mkdir -p if target directory doesn't exist
+            target_parent = str(Path(target_path).parent)
+            if target_parent and target_parent != ".":
+                commands.append(f"mkdir -p '{target_parent}'")
+            
+            commands.append(f"mv '{source_path}' '{target_path}'")
         
-        commands.append(f"cp '{source_path}' '{target_path}'")
+        # Generate cp commands for remaining copy operations
+        for source_record, target_path in remaining_cp_operations:
+            source_path = source_record.get_full_path()
+            
+            # Add mkdir -p if target directory doesn't exist
+            target_parent = str(Path(target_path).parent)
+            if target_parent and target_parent != ".":
+                commands.append(f"mkdir -p '{target_parent}'")
+            
+            commands.append(f"cp '{source_path}' '{target_path}'")
+        
+        # Generate rm commands for remaining delete operations
+        for record in remaining_rm_operations:
+            commands.append(f"rm '{record.get_full_path()}'")
+    else:
+        # No delete operations, just generate cp commands
+        for source_record, target_path in to_copy:
+            source_path = source_record.get_full_path()
+            
+            # Add mkdir -p if target directory doesn't exist
+            target_parent = str(Path(target_path).parent)
+            if target_parent and target_parent != ".":
+                commands.append(f"mkdir -p '{target_parent}'")
+            
+            commands.append(f"cp '{source_path}' '{target_path}'")
     
     # Generate copy commands for missing files (placeholder - would need source dir)
     for record in missing:
         # This would require access to source directory - for now just comment
         commands.append(f"# TODO: copy from source to '{record.get_full_path()}'")
     
-    # Generate rm commands for extra files
-    if delete_extra:
-        for record in extra:
-            commands.append(f"rm '{record.get_full_path()}'")
-    
     return commands
 
 
 def execute_file_operations(unchanged: List[Tuple], to_copy: List[Tuple], missing: List[FileRecord], 
                            extra: List[FileRecord], target_dir: Path, delete_extra: bool, 
-                           verbose: bool) -> bool:
+                           verbose: bool, level: int) -> bool:
     """Execute actual file operations"""
     success = True
     
-    # Handle files that need copying
-    for source_record, target_path in to_copy:
-        source_path = target_dir / source_record.get_full_path()
-        dest_path = target_dir / target_path
-        
-        try:
-            # Create target directory if needed
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Copy file
-            shutil.copy2(str(source_path), str(dest_path))
-            
-            if verbose:
-                print(f"Copied: {source_record.get_full_path()} -> {target_path}")
-        
-        except (OSError, IOError) as e:
-            print(f"Error copying {source_path} to {dest_path}: {e}", file=sys.stderr)
-            success = False
-    
-    # Handle missing files (would need source directory - placeholder)
-    if missing and verbose:
-        print(f"Warning: {len(missing)} files need to be copied from source (not implemented)")
-    
-    # Handle extra files
+    # Optimize cp + rm operations into mv operations when possible
     if delete_extra:
-        for record in extra:
+        mv_operations, remaining_cp_operations, remaining_rm_operations = optimize_commands(to_copy, extra, level)
+        
+        # Handle move operations
+        for source_path, target_path in mv_operations:
+            source_full_path = target_dir / source_path
+            dest_full_path = target_dir / target_path
+            
+            try:
+                # Create target directory if needed
+                dest_full_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Move file
+                shutil.move(str(source_full_path), str(dest_full_path))
+                
+                if verbose:
+                    print(f"Moved: {source_path} -> {target_path}")
+            
+            except (OSError, IOError) as e:
+                print(f"Error moving {source_full_path} to {dest_full_path}: {e}", file=sys.stderr)
+                success = False
+        
+        # Handle remaining copy operations
+        for source_record, target_path in remaining_cp_operations:
+            source_path = target_dir / source_record.get_full_path()
+            dest_path = target_dir / target_path
+            
+            try:
+                # Create target directory if needed
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Copy file
+                shutil.copy2(str(source_path), str(dest_path))
+                
+                if verbose:
+                    print(f"Copied: {source_record.get_full_path()} -> {target_path}")
+            
+            except (OSError, IOError) as e:
+                print(f"Error copying {source_path} to {dest_path}: {e}", file=sys.stderr)
+                success = False
+        
+        # Handle remaining delete operations
+        for record in remaining_rm_operations:
             file_path = target_dir / record.get_full_path()
             try:
                 file_path.unlink()
@@ -336,6 +444,29 @@ def execute_file_operations(unchanged: List[Tuple], to_copy: List[Tuple], missin
             except (OSError, IOError) as e:
                 print(f"Error deleting {file_path}: {e}", file=sys.stderr)
                 success = False
+    else:
+        # No delete operations, just handle copy operations
+        for source_record, target_path in to_copy:
+            source_path = target_dir / source_record.get_full_path()
+            dest_path = target_dir / target_path
+            
+            try:
+                # Create target directory if needed
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Copy file
+                shutil.copy2(str(source_path), str(dest_path))
+                
+                if verbose:
+                    print(f"Copied: {source_record.get_full_path()} -> {target_path}")
+            
+            except (OSError, IOError) as e:
+                print(f"Error copying {source_path} to {dest_path}: {e}", file=sys.stderr)
+                success = False
+    
+    # Handle missing files (would need source directory - placeholder)
+    if missing and verbose:
+        print(f"Warning: {len(missing)} files need to be copied from source (not implemented)")
     
     return success
 
@@ -391,7 +522,7 @@ def mirror_command(args):
                 print("\nExecuting file operations...")
             
             success = execute_file_operations(unchanged, to_copy, missing, extra, 
-                                            target_dir, args.delete_extra, args.verbose)
+                                            target_dir, args.delete_extra, args.verbose, args.level)
             
             if not success:
                 print("Some operations failed", file=sys.stderr)
@@ -401,7 +532,7 @@ def mirror_command(args):
         else:
             # Generate and print Unix commands (default dry-run)
             commands = generate_unix_commands(unchanged, to_copy, missing, extra, 
-                                            target_dir, args.verbose, args.delete_extra)
+                                            target_dir, args.verbose, args.delete_extra, args.level)
             if commands:
                 for command in commands:
                     print(command)
