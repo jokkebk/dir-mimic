@@ -190,45 +190,78 @@ def inventory_command(args):
 
 
 def classify_files(inventory_records: List[FileRecord], target_records: List[FileRecord], 
-                  level: int) -> Tuple[Dict, Dict, List[FileRecord], List[FileRecord]]:
-    """Classify files as unchanged, moved, or deleted"""
-    # Create identity mappings
+                  level: int) -> Tuple[List[Tuple], List[Tuple], List[FileRecord], List[FileRecord]]:
+    """Classify files as unchanged, need copying, missing, or extra"""
+    # Create identity mappings with lists to handle duplicates in both inventory and target
     inventory_by_identity = {}
     target_by_identity = {}
     
     for record in inventory_records:
         key = record.get_identity_key(level)
-        inventory_by_identity[key] = record
+        if key not in inventory_by_identity:
+            inventory_by_identity[key] = []
+        inventory_by_identity[key].append(record)
     
     for record in target_records:
         key = record.get_identity_key(level)
-        target_by_identity[key] = record
+        if key not in target_by_identity:
+            target_by_identity[key] = []
+        target_by_identity[key].append(record)
     
-    unchanged = {}  # identity_key -> (inventory_record, target_record)
-    moved = {}      # identity_key -> (inventory_record, target_record)
-    missing = []    # inventory records not found in target
-    extra = []      # target records not found in inventory
+    unchanged = []  # [(inventory_record, target_record)] - files in correct locations
+    to_copy = []    # [(source_record, target_path)] - files that need copying
+    missing = []    # [inventory_record] - files with no source in target to copy from
+    extra = []      # [target_record] - files in target not in inventory
     
-    # Find unchanged and moved files
-    for identity_key, inv_record in inventory_by_identity.items():
-        if identity_key in target_by_identity:
-            tgt_record = target_by_identity[identity_key]
-            if inv_record.get_full_path() == tgt_record.get_full_path():
-                unchanged[identity_key] = (inv_record, tgt_record)
-            else:
-                moved[identity_key] = (inv_record, tgt_record)
+    # Process each file identity
+    for identity_key in set(inventory_by_identity.keys()) | set(target_by_identity.keys()):
+        inv_records = inventory_by_identity.get(identity_key, [])
+        tgt_records = target_by_identity.get(identity_key, [])
+        
+        # Create sets of paths for easier comparison
+        inv_paths = {record.get_full_path() for record in inv_records}
+        tgt_paths = {record.get_full_path() for record in tgt_records}
+        
+        if not inv_records:
+            # Files exist in target but not in inventory - mark as extra
+            extra.extend(tgt_records)
+        elif not tgt_records:
+            # Files exist in inventory but not in target - mark as missing
+            missing.extend(inv_records)
         else:
-            missing.append(inv_record)
+            # Files exist in both - compare locations
+            
+            # Find files already in correct locations (unchanged)
+            common_paths = inv_paths & tgt_paths
+            for path in common_paths:
+                # Find the records for this path
+                inv_record = next(r for r in inv_records if r.get_full_path() == path)
+                tgt_record = next(r for r in tgt_records if r.get_full_path() == path)
+                unchanged.append((inv_record, tgt_record))
+            
+            # Find inventory locations missing from target (need copying)
+            missing_paths = inv_paths - tgt_paths
+            if missing_paths and tgt_records:
+                # Use first target record as source for copying
+                source_record = tgt_records[0]  # Any target location can be the source
+                for path in missing_paths:
+                    to_copy.append((source_record, path))
+            elif missing_paths and not tgt_records:
+                # No target files to copy from - mark as missing
+                for path in missing_paths:
+                    inv_record = next(r for r in inv_records if r.get_full_path() == path)
+                    missing.append(inv_record)
+            
+            # Find target locations not in inventory (extra files)
+            extra_paths = tgt_paths - inv_paths
+            for path in extra_paths:
+                tgt_record = next(r for r in tgt_records if r.get_full_path() == path)
+                extra.append(tgt_record)
     
-    # Find extra files
-    for identity_key, tgt_record in target_by_identity.items():
-        if identity_key not in inventory_by_identity:
-            extra.append(tgt_record)
-    
-    return unchanged, moved, missing, extra
+    return unchanged, to_copy, missing, extra
 
 
-def generate_unix_commands(unchanged: Dict, moved: Dict, missing: List[FileRecord], 
+def generate_unix_commands(unchanged: List[Tuple], to_copy: List[Tuple], missing: List[FileRecord], 
                           extra: List[FileRecord], target_dir: Path, verbose: bool, 
                           delete_extra: bool) -> List[str]:
     """Generate Unix commands for dry-run mode"""
@@ -236,57 +269,56 @@ def generate_unix_commands(unchanged: Dict, moved: Dict, missing: List[FileRecor
     
     # Generate echo commands for unchanged files (only if verbose)
     if verbose:
-        for identity_key, (inv_record, tgt_record) in unchanged.items():
-            commands.append(f"echo {tgt_record.get_full_path()} unchanged")
+        for inv_record, tgt_record in unchanged:
+            commands.append(f"echo '{tgt_record.get_full_path()}' unchanged")
     
-    # Generate mv commands for moved files
-    for identity_key, (inv_record, tgt_record) in moved.items():
-        current_path = tgt_record.get_full_path()
-        target_path = inv_record.get_full_path()
+    # Generate cp commands for files that need copying
+    for source_record, target_path in to_copy:
+        source_path = source_record.get_full_path()
         
         # Add mkdir -p if target directory doesn't exist
         target_parent = str(Path(target_path).parent)
         if target_parent and target_parent != ".":
-            commands.append(f"mkdir -p {target_parent}")
+            commands.append(f"mkdir -p '{target_parent}'")
         
-        commands.append(f"mv {current_path} {target_path}")
+        commands.append(f"cp '{source_path}' '{target_path}'")
     
     # Generate copy commands for missing files (placeholder - would need source dir)
     for record in missing:
         # This would require access to source directory - for now just comment
-        commands.append(f"# TODO: copy from source to {record.get_full_path()}")
+        commands.append(f"# TODO: copy from source to '{record.get_full_path()}'")
     
     # Generate rm commands for extra files
     if delete_extra:
         for record in extra:
-            commands.append(f"rm {record.get_full_path()}")
+            commands.append(f"rm '{record.get_full_path()}'")
     
     return commands
 
 
-def execute_file_operations(unchanged: Dict, moved: Dict, missing: List[FileRecord], 
+def execute_file_operations(unchanged: List[Tuple], to_copy: List[Tuple], missing: List[FileRecord], 
                            extra: List[FileRecord], target_dir: Path, delete_extra: bool, 
                            verbose: bool) -> bool:
     """Execute actual file operations"""
     success = True
     
-    # Handle moved files
-    for identity_key, (inv_record, tgt_record) in moved.items():
-        current_path = target_dir / tgt_record.get_full_path()
-        target_path = target_dir / inv_record.get_full_path()
+    # Handle files that need copying
+    for source_record, target_path in to_copy:
+        source_path = target_dir / source_record.get_full_path()
+        dest_path = target_dir / target_path
         
         try:
             # Create target directory if needed
-            target_path.parent.mkdir(parents=True, exist_ok=True)
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Move file
-            shutil.move(str(current_path), str(target_path))
+            # Copy file
+            shutil.copy2(str(source_path), str(dest_path))
             
             if verbose:
-                print(f"Moved: {tgt_record.get_full_path()} -> {inv_record.get_full_path()}")
+                print(f"Copied: {source_record.get_full_path()} -> {target_path}")
         
         except (OSError, IOError) as e:
-            print(f"Error moving {current_path} to {target_path}: {e}", file=sys.stderr)
+            print(f"Error copying {source_path} to {dest_path}: {e}", file=sys.stderr)
             success = False
     
     # Handle missing files (would need source directory - placeholder)
@@ -344,12 +376,12 @@ def mirror_command(args):
             print(f"Found {len(target_records)} files in target directory")
         
         # Classify files
-        unchanged, moved, missing, extra = classify_files(inventory_records, target_records, args.level)
+        unchanged, to_copy, missing, extra = classify_files(inventory_records, target_records, args.level)
         
         # Print summary
         print(f"File analysis complete:")
         print(f"  Unchanged: {len(unchanged)}")
-        print(f"  Moved: {len(moved)}")
+        print(f"  To copy: {len(to_copy)}")
         print(f"  Missing from target: {len(missing)}")
         print(f"  Extra in target: {len(extra)}")
         
@@ -358,7 +390,7 @@ def mirror_command(args):
             if args.verbose:
                 print("\nExecuting file operations...")
             
-            success = execute_file_operations(unchanged, moved, missing, extra, 
+            success = execute_file_operations(unchanged, to_copy, missing, extra, 
                                             target_dir, args.delete_extra, args.verbose)
             
             if not success:
@@ -368,7 +400,7 @@ def mirror_command(args):
             print("Mirror operation completed successfully")
         else:
             # Generate and print Unix commands (default dry-run)
-            commands = generate_unix_commands(unchanged, moved, missing, extra, 
+            commands = generate_unix_commands(unchanged, to_copy, missing, extra, 
                                             target_dir, args.verbose, args.delete_extra)
             if commands:
                 for command in commands:
