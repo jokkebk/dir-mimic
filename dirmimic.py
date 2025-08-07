@@ -95,7 +95,8 @@ def handle_mirror(args):
             rel_folder = ""
         for fname in files:
             fpath = os.path.join(root, fname)
-            key = calc_key(fpath, level)
+            key_dict = calc_key(fpath, level)
+            key = tuple((key_dict[k] for k in sorted(key_dict.keys())))
             destination_dirs[key].append(rel_folder)
 
     removes = [] # (key, path) pairs for files to remove
