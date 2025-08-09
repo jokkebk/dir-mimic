@@ -141,8 +141,6 @@ def handle_mirror(args):
                 src_path = os.path.join(args.target_dir, source_folders[0], key.filename)
                 print(f"echo Missing: '{src_path}'", file=sys.stderr)
         elif source_folders and dest_folders:
-            one_dest = dest_folders[0] # Guaranteed to exist
-
             only_source = [s for s in source_folders if s not in dest_folders]
             only_dest = [d for d in dest_folders if d not in source_folders]
 
@@ -150,12 +148,11 @@ def handle_mirror(args):
 
             # Do mv while we have stuff in only_source and only_dest
             for src, dest in zip(only_source, only_dest):
-                # Move from dest to src to match
-                src_path = os.path.join(args.target_dir, src, key.filename)
-                dest_path = os.path.join(args.target_dir, dest, key.filename)
-                print(f"mv '{dest_path}' to '{src_path}'", file=sys.stderr)
-                if args.doit: os.rename(dest_path, src_path)
-            
+                from_path = os.path.join(args.target_dir, dest, key.filename)
+                to_path = os.path.join(args.target_dir, src, key.filename)
+                print(f"mv '{from_path}' to '{to_path}'", file=sys.stderr)
+                if args.doit: os.rename(from_path, to_path)
+
             # Remove files in destination that are not in source
             for dest in only_dest[len(only_source):]:
                 dest_path = os.path.join(args.target_dir, dest, key.filename)
@@ -164,10 +161,10 @@ def handle_mirror(args):
             
             # Copy extra missing files to match source
             for src in only_source[len(only_dest):]:
-                src_path = os.path.join(args.target_dir, one_dest, key.filename)
-                dest_path = os.path.join(args.target_dir, src, key.filename)
-                print(f"cp '{src_path}' to '{dest_path}'", file=sys.stderr)
-                if args.doit: shutil.copy2(src_path, dest_path)
+                from_path = os.path.join(args.target_dir, dest_folders[0], key.filename)
+                to_path = os.path.join(args.target_dir, src, key.filename)
+                print(f"cp '{from_path}' to '{to_path}'", file=sys.stderr)
+                if args.doit: shutil.copy2(from_path, to_path)
 
 def main():
     parser = argparse.ArgumentParser(
