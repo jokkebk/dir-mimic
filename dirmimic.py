@@ -141,7 +141,7 @@ def handle_mirror(args):
                 src_path = os.path.join(args.target_dir, source_folders[0], key.filename)
                 print(f"echo Missing: '{src_path}'", file=sys.stderr)
         elif source_folders and dest_folders:
-            one_source = source_folders[0] # Guaranteed to exist
+            one_dest = dest_folders[0] # Guaranteed to exist
 
             only_source = [s for s in source_folders if s not in dest_folders]
             only_dest = [d for d in dest_folders if d not in source_folders]
@@ -164,7 +164,7 @@ def handle_mirror(args):
             
             # Copy extra missing files to match source
             for src in only_source[len(only_dest):]:
-                src_path = os.path.join(args.target_dir, one_source, key.filename)
+                src_path = os.path.join(args.target_dir, one_dest, key.filename)
                 dest_path = os.path.join(args.target_dir, src, key.filename)
                 print(f"cp '{src_path}' to '{dest_path}'", file=sys.stderr)
                 if args.doit: shutil.copy2(src_path, dest_path)
