@@ -112,12 +112,14 @@ def handle_mirror(args):
             for folder in dest_folders:
                 print("Remove:", os.path.join(args.target_dir, folder, key[0]), file=sys.stderr)
         elif source_folders and not dest_folders:
-                print("Missing:", os.path.join(args.target_dir, source_folders[0], key[0]), file=sys.stderr)
+                print("echo Missing:", os.path.join(args.target_dir, source_folders[0], key[0]), file=sys.stderr)
         elif source_folders and dest_folders:
-            if len(source_folders) > 1 or len(dest_folders) > 1:
-                print("Special:", key, "in folders", source_folders, "and", dest_folders, file=sys.stderr)
-            else:
-                print("Keep:", os.path.join(args.target_dir, dest_folders[0], key[0]), file=sys.stderr)
+            one_source = source_folders[0] # Guaranteed to exist
+
+            only_source = [s for s in source_folders if s not in dest_folders]
+            only_dest = [d for d in dest_folders if d not in source_folders]
+
+            print("For", key, "we have:", only_dest, "in destination and", only_source, "in source", file=sys.stderr)
 
 def main():
     parser = argparse.ArgumentParser(
