@@ -141,30 +141,60 @@ def handle_mirror(args):
                 src_path = os.path.join(args.target_dir, source_folders[0], key.filename)
                 print(f"echo Missing: '{src_path}'", file=sys.stderr)
         elif source_folders and dest_folders:
-            only_source = [s for s in source_folders if s not in dest_folders]
-            only_dest = [d for d in dest_folders if d not in source_folders]
+            only_source = sorted([s for s in source_folders if s not in dest_folders])
+            only_dest = sorted([d for d in dest_folders if d not in source_folders])
 
             if not only_source and not only_dest: continue # No need to sync
 
-            # Do mv while we have stuff in only_source and only_dest
-            for src, dest in zip(only_source, only_dest):
-                from_path = os.path.join(args.target_dir, dest, key.filename)
-                to_path = os.path.join(args.target_dir, src, key.filename)
-                print(f"mv '{from_path}' to '{to_path}'", file=sys.stderr)
-                if args.doit: os.rename(from_path, to_path)
+            # Case: More destinations (missing) than sources (extras)
+            if len(only_source) > len(only_dest):
+                num_to_copy = len(only_source) - len(only_dest)
+                
+                # 1. Perform copies
+                copy_from_dir = dest_folders[0]
+                from_path = os.path.join(args.target_dir, copy_from_dir, key.filename)
+                
+                for i in range(num_to_copy):
+                    to_dir = only_source[i]
+                    to_path = os.path.join(args.target_dir, to_dir, key.filename)
+                    print(f"cp '{from_path}' to '{to_path}'", file=sys.stderr)
+                    if args.doit:
+                        os.makedirs(os.path.dirname(to_path), exist_ok=True)
+                        shutil.copy2(from_path, to_path)
 
-            # Remove files in destination that are not in source
-            for dest in only_dest[len(only_source):]:
-                dest_path = os.path.join(args.target_dir, dest, key.filename)
-                print(f"rm '{dest_path}'", file=sys.stderr)
-                if args.doit: os.remove(dest_path)
-            
-            # Copy extra missing files to match source
-            for src in only_source[len(only_dest):]:
-                from_path = os.path.join(args.target_dir, dest_folders[0], key.filename)
-                to_path = os.path.join(args.target_dir, src, key.filename)
-                print(f"cp '{from_path}' to '{to_path}'", file=sys.stderr)
-                if args.doit: shutil.copy2(from_path, to_path)
+                # The remaining are moves
+                moves_source_folders = only_source[num_to_copy:]
+                moves_dest_folders = only_dest
+                for src, dest in zip(moves_source_folders, moves_dest_folders):
+                    from_path = os.path.join(args.target_dir, dest, key.filename)
+                    to_path = os.path.join(args.target_dir, src, key.filename)
+                    print(f"mv '{from_path}' to '{to_path}'", file=sys.stderr)
+                    if args.doit:
+                        os.makedirs(os.path.dirname(to_path), exist_ok=True)
+                        os.rename(from_path, to_path)
+
+            # Case: More sources (extras) than destinations (missing), or equal
+            else: # len(only_dest) >= len(only_source)
+                num_to_move = len(only_source)
+                
+                # 1. Perform moves
+                moves_source_folders = only_source
+                moves_dest_folders = only_dest[:num_to_move]
+                for src, dest in zip(moves_source_folders, moves_dest_folders):
+                    from_path = os.path.join(args.target_dir, dest, key.filename)
+                    to_path = os.path.join(args.target_dir, src, key.filename)
+                    print(f"mv '{from_path}' to '{to_path}'", file=sys.stderr)
+                    if args.doit:
+                        os.makedirs(os.path.dirname(to_path), exist_ok=True)
+                        os.rename(from_path, to_path)
+
+                # 2. Perform deletes
+                deletes_dest_folders = only_dest[num_to_move:]
+                for dest in deletes_dest_folders:
+                    dest_path = os.path.join(args.target_dir, dest, key.filename)
+                    print(f"rm '{dest_path}'", file=sys.stderr)
+                    if args.doit:
+                        os.remove(dest_path)
 
 def main():
     parser = argparse.ArgumentParser(
