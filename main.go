@@ -567,6 +567,7 @@ h1 {
       or click to select
     </div>
   </div>
+  <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
 
   <div id="content">
     <div class="empty-state">
@@ -652,9 +653,11 @@ dropzone.addEventListener('drop', async (e) => {
   dropzoneText.innerHTML = '<span style="color: #ff6e6e;">Please drop a folder, not a file</span>';
 });
 
+const folderInput = document.getElementById('folderInput');
+
 dropzone.addEventListener('click', async () => {
-  // Try File System Access API for directory picker
-  if ('showDirectoryPicker' in window) {
+  // Try File System Access API for directory picker (requires secure context)
+  if ('showDirectoryPicker' in window && window.isSecureContext) {
     try {
       const handle = await window.showDirectoryPicker();
       await scanDirectoryHandle(handle);
@@ -664,8 +667,46 @@ dropzone.addEventListener('click', async () => {
       }
     }
   } else {
-    dropzoneText.innerHTML = 'Directory picker not supported.<br>Please drag & drop a folder instead.';
+    // Fallback: use hidden file input with webkitdirectory
+    folderInput.click();
   }
+});
+
+// Handle folder selection via file input (works in non-secure contexts)
+folderInput.addEventListener('change', async (e) => {
+  const files = e.target.files;
+  if (!files || files.length === 0) return;
+
+  dropzoneText.innerHTML = '<span class="scanning">Scanning folder...</span>';
+  sourceCatalog = [];
+
+  // Extract folder name from first file's path
+  let folderName = '';
+  if (files[0].webkitRelativePath) {
+    folderName = files[0].webkitRelativePath.split('/')[0];
+  }
+
+  for (const file of files) {
+    // webkitRelativePath gives us "folder/subfolder/file.txt"
+    // We want to strip the root folder name
+    let path = file.webkitRelativePath;
+    if (path.startsWith(folderName + '/')) {
+      path = path.substring(folderName.length + 1);
+    }
+
+    sourceCatalog.push({
+      path: path,
+      size: file.size,
+      mtime: file.lastModified
+    });
+  }
+
+  console.log('Source catalog:', sourceCatalog.length, 'files');
+  dropzoneText.innerHTML = '<strong>' + folderName + '</strong><br>' + sourceCatalog.length + ' files scanned';
+  computeDiff();
+
+  // Reset input so same folder can be selected again
+  folderInput.value = '';
 });
 
 // Scan directory using File System Access API
