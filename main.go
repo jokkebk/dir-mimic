@@ -35,10 +35,9 @@ type Operation struct {
 	To   string `json:"to,omitempty"`
 }
 
-// Plan represents the operations to apply
+// Plan is just a list of operations
 type Plan struct {
 	Operations []Operation `json:"operations"`
-	Checksum   string      `json:"checksum"`
 }
 
 var (
@@ -200,21 +199,22 @@ func handleApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read raw body for checksum
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+
 	var plan Plan
-	if err := json.NewDecoder(r.Body).Decode(&plan); err != nil {
+	if err := json.Unmarshal(body, &plan); err != nil {
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Verify checksum
-	opsJSON, _ := json.Marshal(plan.Operations)
-	computed := sha256.Sum256(opsJSON)
-	computedHex := hex.EncodeToString(computed[:])
-
-	if plan.Checksum != computedHex {
-		http.Error(w, "Checksum mismatch", http.StatusBadRequest)
-		return
-	}
+	// Compute checksum of received payload
+	checksum := sha256.Sum256(body)
+	checksumHex := hex.EncodeToString(checksum[:])
 
 	// Display plan in terminal
 	fmt.Println("\n" + strings.Repeat("=", 60))
@@ -240,7 +240,7 @@ func handleApply(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Printf("Summary: %d moves, %d copies, %d deletes, %d missing\n", mvCount, cpCount, rmCount, missingCount)
-	fmt.Printf("Checksum: %s\n", plan.Checksum[:16]+"...")
+	fmt.Printf("Checksum: %s\n", checksumHex)
 	fmt.Println(strings.Repeat("-", 60))
 
 	// Ask for confirmation

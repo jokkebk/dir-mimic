@@ -768,12 +768,12 @@ applyBtn.addEventListener('click', async () => {
     return;
   }
 
-  // Compute checksum using pure JS SHA-256
-  const opsJson = JSON.stringify(executableOps);
-  const checksum = sha256(opsJson);
+  // Build payload and compute checksum of exact bytes to be sent
+  const payload = JSON.stringify({operations: executableOps});
+  const checksum = sha256(payload);
 
   // Show checksum in UI before sending
-  content.innerHTML = '<div class="status pending">Sending plan to server...<div class="checksum">Checksum: ' + checksum + '</div></div>';
+  content.innerHTML = '<div class="status pending">Sending plan to server. Verify checksum matches terminal:<div class="checksum">' + checksum + '</div></div>';
 
   applyBtn.disabled = true;
   applyBtn.textContent = 'Waiting for confirmation...';
@@ -782,7 +782,7 @@ applyBtn.addEventListener('click', async () => {
     const res = await fetch('/apply', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({operations: executableOps, checksum: checksum})
+      body: payload
     });
 
     const result = await res.json();
