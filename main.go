@@ -192,14 +192,49 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(htmlUI))
 }
 
+// CatalogResponse contains the catalog plus metadata
+type CatalogResponse struct {
+	Path       string      `json:"path"`
+	Files      []FileEntry `json:"files"`
+	FileCount  int         `json:"fileCount"`
+	FolderCount int        `json:"folderCount"`
+	TotalSize  int64       `json:"totalSize"`
+}
+
 // handleCatalog returns the server-side catalog as JSON
 func handleCatalog(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
 	if r.Method == http.MethodOptions {
 		return
 	}
+
+	// Calculate stats
+	folders := make(map[string]bool)
+	var totalSize int64
+	for _, entry := range catalog {
+		totalSize += entry.Size
+		// Extract folder path
+		dir := filepath.Dir(entry.Path)
+		if dir != "." {
+			folders[dir] = true
+			// Also count parent folders
+			for dir != "." && dir != "/" {
+				folders[dir] = true
+				dir = filepath.Dir(dir)
+			}
+		}
+	}
+
+	response := CatalogResponse{
+		Path:        targetDir,
+		Files:       catalog,
+		FileCount:   len(catalog),
+		FolderCount: len(folders),
+		TotalSize:   totalSize,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(catalog)
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleApply receives a plan and executes it after terminal confirmation

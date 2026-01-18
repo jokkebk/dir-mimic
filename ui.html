@@ -214,9 +214,12 @@ h1 {
     <div id="serverConfig" style="display: none;">
       <input type="text" id="serverInput" placeholder="server:port" style="padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #252540; color: #eee; font-size: 0.9rem; width: 150px;">
       <button class="btn" id="connectBtn">Connect</button>
+      <span id="connectedStatus" style="display: none; color: #6eff9e; font-size: 0.85rem;">✓ Connected</span>
     </div>
     <button class="btn" id="applyBtn" disabled>Apply Changes</button>
   </header>
+
+  <div id="serverInfo" style="display: none; background: #252540; border-radius: 8px; padding: 12px 15px; font-size: 0.85rem; color: #aaa; margin-bottom: 20px;"></div>
 
   <div class="dropzone" id="dropzone">
     <div class="dropzone-text" id="dropzoneText">
@@ -324,6 +327,8 @@ const applyBtn = document.getElementById('applyBtn');
 const serverConfig = document.getElementById('serverConfig');
 const serverInput = document.getElementById('serverInput');
 const connectBtn = document.getElementById('connectBtn');
+const connectedStatus = document.getElementById('connectedStatus');
+const serverInfo = document.getElementById('serverInfo');
 
 // Check if running from file:// protocol
 const isFileProtocol = window.location.protocol === 'file:';
@@ -332,8 +337,22 @@ const isFileProtocol = window.location.protocol === 'file:';
 async function loadCatalog() {
   try {
     const res = await fetch(serverBaseUrl + '/catalog');
-    serverCatalog = await res.json();
+    const data = await res.json();
+    serverCatalog = data.files;
     console.log('Server catalog loaded:', serverCatalog.length, 'files');
+
+    // Show connected status
+    if (isFileProtocol) {
+      serverInput.style.display = 'none';
+      connectBtn.style.display = 'none';
+      connectedStatus.style.display = 'inline';
+    }
+
+    // Show server info
+    serverInfo.style.display = 'block';
+    serverInfo.innerHTML = '<strong style="color: #ccc;">' + data.path + '</strong><br>' +
+      data.fileCount + ' files, ' + data.folderCount + ' folders, ' + formatSize(data.totalSize);
+
     content.innerHTML = '<div class="empty-state">Drop a folder above to compare with the server directory</div>';
   } catch (err) {
     console.error('Failed to load catalog:', err);
@@ -852,7 +871,11 @@ applyBtn.addEventListener('click', async () => {
       }
       // Reload catalog
       const catalogRes = await fetch(serverBaseUrl + '/catalog');
-      serverCatalog = await catalogRes.json();
+      const catalogData = await catalogRes.json();
+      serverCatalog = catalogData.files;
+      // Update server info
+      serverInfo.innerHTML = '<strong style="color: #ccc;">' + catalogData.path + '</strong><br>' +
+        catalogData.fileCount + ' files, ' + catalogData.folderCount + ' folders, ' + formatSize(catalogData.totalSize);
       operations = [];
       summary.style.display = 'none';
     } else {
