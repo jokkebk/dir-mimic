@@ -175,6 +175,13 @@ func computeSampleHash(path string, size int64) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// setCORSHeaders adds CORS headers to allow requests from file:// and other origins
+func setCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
 // handleUI serves the embedded HTML UI
 func handleUI(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -187,13 +194,20 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 
 // handleCatalog returns the server-side catalog as JSON
 func handleCatalog(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == http.MethodOptions {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(catalog)
 }
 
 // handleApply receives a plan and executes it after terminal confirmation
 func handleApply(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == http.MethodOptions {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

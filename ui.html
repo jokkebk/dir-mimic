@@ -211,6 +211,10 @@ h1 {
 <div class="container">
   <header>
     <h1>dir-mimic</h1>
+    <div id="serverConfig" style="display: none;">
+      <input type="text" id="serverInput" placeholder="server:port" style="padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #252540; color: #eee; font-size: 0.9rem; width: 150px;">
+      <button class="btn" id="connectBtn">Connect</button>
+    </div>
     <button class="btn" id="applyBtn" disabled>Apply Changes</button>
   </header>
 
@@ -309,6 +313,7 @@ const sha256 = (function() {
 let serverCatalog = [];
 let sourceCatalog = [];
 let operations = [];
+let serverBaseUrl = ''; // Empty for same-origin, or 'http://host:port' for remote
 
 // DOM elements
 const dropzone = document.getElementById('dropzone');
@@ -316,18 +321,70 @@ const dropzoneText = document.getElementById('dropzoneText');
 const content = document.getElementById('content');
 const summary = document.getElementById('summary');
 const applyBtn = document.getElementById('applyBtn');
+const serverConfig = document.getElementById('serverConfig');
+const serverInput = document.getElementById('serverInput');
+const connectBtn = document.getElementById('connectBtn');
 
-// Fetch server catalog on load
-async function init() {
+// Check if running from file:// protocol
+const isFileProtocol = window.location.protocol === 'file:';
+
+// Fetch server catalog
+async function loadCatalog() {
   try {
-    const res = await fetch('/catalog');
+    const res = await fetch(serverBaseUrl + '/catalog');
     serverCatalog = await res.json();
     console.log('Server catalog loaded:', serverCatalog.length, 'files');
+    content.innerHTML = '<div class="empty-state">Drop a folder above to compare with the server directory</div>';
   } catch (err) {
     console.error('Failed to load catalog:', err);
     content.innerHTML = '<div class="status error">Failed to load server catalog</div>';
   }
 }
+
+// Initialize based on protocol
+async function init() {
+  if (isFileProtocol) {
+    // Show server config UI
+    serverConfig.style.display = 'flex';
+    serverConfig.style.gap = '10px';
+    serverConfig.style.alignItems = 'center';
+    content.innerHTML = '<div class="empty-state">Enter server address above to connect</div>';
+
+    // Try to restore from localStorage
+    const savedServer = localStorage.getItem('dir-mimic-server');
+    if (savedServer) {
+      serverInput.value = savedServer;
+    }
+  } else {
+    // Running from server, use same-origin
+    await loadCatalog();
+  }
+}
+
+// Connect button handler
+connectBtn.addEventListener('click', async () => {
+  const server = serverInput.value.trim();
+  if (!server) {
+    content.innerHTML = '<div class="status error">Please enter a server address</div>';
+    return;
+  }
+
+  // Add http:// if no protocol specified
+  serverBaseUrl = server.includes('://') ? server : 'http://' + server;
+
+  // Save to localStorage
+  localStorage.setItem('dir-mimic-server', server);
+
+  content.innerHTML = '<div class="status pending">Connecting to ' + serverBaseUrl + '...</div>';
+  await loadCatalog();
+});
+
+// Allow pressing Enter in server input
+serverInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    connectBtn.click();
+  }
+});
 
 init();
 
@@ -779,7 +836,7 @@ applyBtn.addEventListener('click', async () => {
   applyBtn.textContent = 'Waiting for confirmation...';
 
   try {
-    const res = await fetch('/apply', {
+    const res = await fetch(serverBaseUrl + '/apply', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: payload
@@ -794,7 +851,7 @@ applyBtn.addEventListener('click', async () => {
         content.innerHTML = '<div class="status success">All operations completed successfully!</div>';
       }
       // Reload catalog
-      const catalogRes = await fetch('/catalog');
+      const catalogRes = await fetch(serverBaseUrl + '/catalog');
       serverCatalog = await catalogRes.json();
       operations = [];
       summary.style.display = 'none';
