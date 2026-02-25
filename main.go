@@ -40,26 +40,64 @@ type Plan struct {
 	Operations []Operation `json:"operations"`
 }
 
+// Default ignore patterns (matched against basename using filepath.Match)
+var defaultIgnorePatterns = []string{
+	"._*",           // macOS AppleDouble resource forks
+	".DS_Store",     // macOS folder metadata
+	".Spotlight-V100", // macOS Spotlight index
+	".Trashes",      // macOS trash
+	".fseventsd",    // macOS FS events
+	"Thumbs.db",     // Windows thumbnails
+	"desktop.ini",   // Windows folder config
+}
+
 var (
-	targetDir  string
-	useHashing bool
-	catalog    []FileEntry
+	targetDir      string
+	useHashing     bool
+	catalog        []FileEntry
+	ignorePatterns []string
 )
+
+// shouldIgnore returns true if the given filename matches any active ignore pattern.
+func shouldIgnore(name string) bool {
+	for _, pattern := range ignorePatterns {
+		matched, err := filepath.Match(pattern, name)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
 
 func main() {
 	port := flag.Int("p", 8080, "HTTP server port")
 	hashFlag := flag.Bool("H", false, "Enable sample hash computation for file identification")
 	localhostOnly := flag.Bool("localhost", false, "Listen only on localhost (for local connections)")
+	noDefaultIgnores := flag.Bool("no-default-ignores", false, "Disable built-in ignore patterns")
+	extraIgnores := flag.String("ignore", "", "Extra ignore patterns (comma-separated, matched against filename)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "Usage: dir-mimic [-H] [-p port] [-localhost] <directory>\n")
+		fmt.Fprintf(os.Stderr, "Usage: dir-mimic [-H] [-p port] [-localhost] [-no-default-ignores] [-ignore patterns] <directory>\n")
 		os.Exit(1)
 	}
 
 	targetDir = args[0]
 	useHashing = *hashFlag
+
+	// Build ignore patterns
+	if !*noDefaultIgnores {
+		ignorePatterns = append(ignorePatterns, defaultIgnorePatterns...)
+	}
+	if *extraIgnores != "" {
+		for _, p := range strings.Split(*extraIgnores, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				ignorePatterns = append(ignorePatterns, p)
+			}
+		}
+	}
 
 	// Verify directory exists
 	info, err := os.Stat(targetDir)
@@ -113,6 +151,12 @@ func scanDirectory(root string, withHash bool) ([]FileEntry, error) {
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if shouldIgnore(info.Name()) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if info.IsDir() {
 			return nil
@@ -200,11 +244,12 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 
 // CatalogResponse contains the catalog plus metadata
 type CatalogResponse struct {
-	Path       string      `json:"path"`
-	Files      []FileEntry `json:"files"`
-	FileCount  int         `json:"fileCount"`
-	FolderCount int        `json:"folderCount"`
-	TotalSize  int64       `json:"totalSize"`
+	Path           string      `json:"path"`
+	Files          []FileEntry `json:"files"`
+	FileCount      int         `json:"fileCount"`
+	FolderCount    int         `json:"folderCount"`
+	TotalSize      int64       `json:"totalSize"`
+	IgnorePatterns []string    `json:"ignorePatterns"`
 }
 
 // handleCatalog returns the server-side catalog as JSON
@@ -232,11 +277,12 @@ func handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := CatalogResponse{
-		Path:        targetDir,
-		Files:       catalog,
-		FileCount:   len(catalog),
-		FolderCount: len(folders),
-		TotalSize:   totalSize,
+		Path:           targetDir,
+		Files:          catalog,
+		FileCount:      len(catalog),
+		FolderCount:    len(folders),
+		TotalSize:      totalSize,
+		IgnorePatterns: ignorePatterns,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

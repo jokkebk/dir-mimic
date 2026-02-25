@@ -317,6 +317,29 @@ let serverCatalog = [];
 let sourceCatalog = [];
 let operations = [];
 let serverBaseUrl = ''; // Empty for same-origin, or 'http://host:port' for remote
+let ignorePatterns = [];
+
+// Glob match against basename: supports * and ? wildcards
+function globMatch(pattern, name) {
+  // Convert glob pattern to regex
+  let re = '^';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if ('.+^${}()|[]\\'.includes(c)) re += '\\' + c;
+    else re += c;
+  }
+  re += '$';
+  return new RegExp(re).test(name);
+}
+
+function shouldIgnore(filename) {
+  for (const pattern of ignorePatterns) {
+    if (globMatch(pattern, filename)) return true;
+  }
+  return false;
+}
 
 // DOM elements
 const dropzone = document.getElementById('dropzone');
@@ -339,7 +362,8 @@ async function loadCatalog() {
     const res = await fetch(serverBaseUrl + '/catalog');
     const data = await res.json();
     serverCatalog = data.files;
-    console.log('Server catalog loaded:', serverCatalog.length, 'files');
+    ignorePatterns = data.ignorePatterns || [];
+    console.log('Server catalog loaded:', serverCatalog.length, 'files, ignore patterns:', ignorePatterns);
 
     // Show connected status
     if (isFileProtocol) {
@@ -491,6 +515,10 @@ folderInput.addEventListener('change', async (e) => {
       path = path.substring(folderName.length + 1);
     }
 
+    // Check if any path component should be ignored
+    const parts = path.split('/');
+    if (parts.some(p => shouldIgnore(p))) continue;
+
     sourceCatalog.push({
       path: path,
       size: file.size,
@@ -513,6 +541,7 @@ async function scanDirectoryHandle(dirHandle, basePath = '') {
 
   async function walkDir(handle, path) {
     for await (const entry of handle.values()) {
+      if (shouldIgnore(entry.name)) continue;
       const entryPath = path ? path + '/' + entry.name : entry.name;
       if (entry.kind === 'directory') {
         await walkDir(entry, entryPath);
@@ -555,6 +584,7 @@ async function scanWebkitEntry(entry) {
   }
 
   async function walkEntry(entry, path) {
+    if (shouldIgnore(entry.name)) return;
     if (entry.isFile) {
       try {
         const file = await readFile(entry);
@@ -873,6 +903,7 @@ applyBtn.addEventListener('click', async () => {
       const catalogRes = await fetch(serverBaseUrl + '/catalog');
       const catalogData = await catalogRes.json();
       serverCatalog = catalogData.files;
+      ignorePatterns = catalogData.ignorePatterns || [];
       // Update server info
       serverInfo.innerHTML = '<strong style="color: #ccc;">' + catalogData.path + '</strong><br>' +
         catalogData.fileCount + ' files, ' + catalogData.folderCount + ' folders, ' + formatSize(catalogData.totalSize);
