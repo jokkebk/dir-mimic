@@ -49,11 +49,12 @@ var (
 func main() {
 	port := flag.Int("p", 8080, "HTTP server port")
 	hashFlag := flag.Bool("H", false, "Enable sample hash computation for file identification")
+	localhostOnly := flag.Bool("localhost", false, "Listen only on localhost (for local connections)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "Usage: dir-mimic [-H] [-p port] <directory>\n")
+		fmt.Fprintf(os.Stderr, "Usage: dir-mimic [-H] [-p port] [-localhost] <directory>\n")
 		os.Exit(1)
 	}
 
@@ -92,8 +93,13 @@ func main() {
 	http.HandleFunc("/catalog", handleCatalog)
 	http.HandleFunc("/apply", handleApply)
 
-	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("http://localhost%s\n", addr)
+	var addr string
+	if *localhostOnly {
+		addr = fmt.Sprintf("localhost:%d", *port)
+	} else {
+		addr = fmt.Sprintf(":%d", *port)
+	}
+	fmt.Printf("http://localhost:%d\n", *port)
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)
