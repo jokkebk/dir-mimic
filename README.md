@@ -29,6 +29,9 @@ go build -o dir-mimic main.go
 
 # Custom port
 ./dir-mimic -p 3000 /path/to/target
+
+# Restrict access to this computer
+./dir-mimic -localhost /path/to/target
 ```
 
 ### Flags
@@ -37,6 +40,7 @@ go build -o dir-mimic main.go
 |------|-------------|
 | `-H` | Enable sample hash (first+last 64KB) for file identification |
 | `-p` | HTTP server port (default: 8080) |
+| `-localhost` | Listen only on localhost instead of all network interfaces |
 
 ## Operations
 
@@ -50,6 +54,8 @@ The tool generates four types of operations:
 | **Missing** | File exists in source but not in target (requires external sync) |
 
 Missing files are displayed in the UI but not executed - use `rsync` or similar to copy them from the source.
+
+Copies preserve the source file's permissions and modification time. Moves preserve the file's existing metadata.
 
 ## Example
 
@@ -83,7 +89,7 @@ Missing files are displayed in the UI but not executed - use `rsync` or similar 
 
 - All operations require terminal confirmation before execution
 - Plan checksum (SHA-256) is displayed for verification
-- Server only listens on localhost by default
+- Use `-localhost` to prevent other devices on the network from connecting
 
 ## Browser Support
 

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 //go:embed ui.html
@@ -42,13 +43,13 @@ type Plan struct {
 
 // Default ignore patterns (matched against basename using filepath.Match)
 var defaultIgnorePatterns = []string{
-	"._*",           // macOS AppleDouble resource forks
-	".DS_Store",     // macOS folder metadata
+	"._*",             // macOS AppleDouble resource forks
+	".DS_Store",       // macOS folder metadata
 	".Spotlight-V100", // macOS Spotlight index
-	".Trashes",      // macOS trash
-	".fseventsd",    // macOS FS events
-	"Thumbs.db",     // Windows thumbnails
-	"desktop.ini",   // Windows folder config
+	".Trashes",        // macOS trash
+	".fseventsd",      // macOS FS events
+	"Thumbs.db",       // Windows thumbnails
+	"desktop.ini",     // Windows folder config
 }
 
 var (
@@ -431,21 +432,34 @@ func executeCopy(from, to string) error {
 	}
 	defer src.Close()
 
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+
 	dst, err := os.Create(toPath)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
 
-	_, err = io.Copy(dst, src)
-	if err != nil {
+	_, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+
+	if err := os.Chmod(toPath, info.Mode()); err != nil {
 		return err
 	}
 
-	// Copy file mode
-	info, err := os.Stat(fromPath)
-	if err == nil {
-		os.Chmod(toPath, info.Mode())
+	// Preserve the source modification time. Access times are not portable and
+	// may be changed by reading the source, so leave the destination access time
+	// as the time of the copy.
+	if err := os.Chtimes(toPath, time.Now(), info.ModTime()); err != nil {
+		return err
 	}
 
 	return nil
