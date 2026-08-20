@@ -10,9 +10,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -136,13 +138,72 @@ func main() {
 	if *localhostOnly {
 		addr = fmt.Sprintf("localhost:%d", *port)
 	} else {
-		addr = fmt.Sprintf(":%d", *port)
+		addr = fmt.Sprintf("0.0.0.0:%d", *port)
 	}
-	fmt.Printf("http://localhost:%d\n", *port)
+	for _, url := range serverURLs(*port, *localhostOnly) {
+		fmt.Println(url)
+	}
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// serverURLs returns addresses that can be used to access the HTTP server.
+func serverURLs(port int, localhostOnly bool) []string {
+	portString := strconv.Itoa(port)
+	if localhostOnly {
+		return []string{"http://localhost:" + portString}
+	}
+
+	urls := []string{"http://localhost:" + portString}
+	seen := map[string]bool{urls[0]: true}
+
+	if hostname, err := os.Hostname(); err == nil && hostname != "" {
+		url := "http://" + net.JoinHostPort(hostname, portString)
+		urls = append(urls, url)
+		seen[url] = true
+	}
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return urls
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			var ip net.IP
+			switch address := address.(type) {
+			case *net.IPNet:
+				ip = address.IP
+			case *net.IPAddr:
+				ip = address.IP
+			}
+			if ip == nil || ip.IsUnspecified() || ip.IsLoopback() {
+				continue
+			}
+
+			host := ip.String()
+			if ip.IsLinkLocalUnicast() && ip.To4() == nil {
+				// Link-local IPv6 addresses require the interface scope in URLs.
+				host += "%25" + iface.Name
+			}
+			url := "http://" + net.JoinHostPort(host, portString)
+			if !seen[url] {
+				urls = append(urls, url)
+				seen[url] = true
+			}
+		}
+	}
+
+	return urls
 }
 
 // scanDirectory walks the directory and builds the catalog

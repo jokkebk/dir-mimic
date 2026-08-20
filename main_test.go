@@ -48,6 +48,14 @@ func TestComputeSampleHash(t *testing.T) {
 	}
 }
 
+func TestServerURLsLocalhostOnly(t *testing.T) {
+	want := []string{"http://localhost:1234"}
+	got := serverURLs(1234, true)
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("serverURLs() = %v, want %v", got, want)
+	}
+}
+
 func TestScanDirectory(t *testing.T) {
 	t.Parallel()
 
